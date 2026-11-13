@@ -2,21 +2,21 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.XR.Interaction.Toolkit.Locomotion.Movement;
 
-// 按下右摇杆在初速与加速之间切换
+// 按下左摇杆在初速与加速之间切换
 [AddComponentMenu("XR/Locomotion/Move Speed Toggle")]
 public class MoveSpeedToggle : MonoBehaviour
 {
-	[Tooltip("按下右摇杆后的移速倍数，再按一次恢复初速")]
+	[Tooltip("按下摇杆后的移速倍数，再按一次恢复初速")]
 	[SerializeField] float m_BoostMultiplier = 2f;
 
-	InputAction m_ToggleAction;           // 右摇杆按下
+	InputAction m_ToggleAction;           // 移动手的摇杆按下（左手）
 	ContinuousMoveProvider m_MoveProvider;
 	float m_BaseMoveSpeed;
 	bool m_Boosted;
 
 	void Awake()
 	{
-		m_ToggleAction = new InputAction("SpeedToggle", InputActionType.Button, "<XRController>{RightHand}/{Primary2DAxisClick}");
+		m_ToggleAction = new InputAction("SpeedToggle", InputActionType.Button, "<XRController>{LeftHand}/{Primary2DAxisClick}");
 		m_ToggleAction.Enable();
 	}
 
