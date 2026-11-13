@@ -1,5 +1,5 @@
 %YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
+%TAG !u! tag:yousandi.cn,2023:
 --- !u!1001 &5821071011530425848
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -49,7 +49,7 @@ PrefabInstance:
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -7511558181221131132, guid: 168d732344b827c46baaa31a43f5b67f, type: 3}
-      propertyPath: 'm_Materials.Array.data[0]'
+      propertyPath: m_Materials.Array.data[0]
       value: 
       objectReference: {fileID: 2100000, guid: 548b2492dd481714bbeb9d1c11e06845, type: 2}
     - target: {fileID: 919132149155446097, guid: 168d732344b827c46baaa31a43f5b67f, type: 3}
@@ -92,6 +92,6 @@ MeshCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 5
-  m_Convex: 0
+  m_Convex: 1
   m_CookingOptions: 30
-  m_Mesh: {fileID: 1846951836829590767, guid: 168d732344b827c46baaa31a43f5b67f, type: 3}
+  m_Mesh: {fileID: 4300000, guid: accb88509a44aef469e4afc27cbed843, type: 2}

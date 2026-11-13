@@ -94,11 +94,22 @@ namespace JSukoAnimals
 		[Tooltip("耐久条在鱼上方的高度（米）")]
 		public float durabilityBarHeightOffset = 0.15f;
 
+		[Header("盾牌")]
+		[Tooltip("左手持鱼按扳机时出现在鱼正前方的盾牌；留空则在场景里按名字 Shield 自动查找")]
+		public GameObject shieldObject;
+		[Tooltip("盾牌出现在鱼正前方的距离（米）")]
+		public float shieldDistance = 0.35f;
+		[Tooltip("盾牌朝向修正（相对鱼头朝向的欧拉角），摆不正时调这里")]
+		public Vector3 shieldEulerOffset = Vector3.zero;
+
 		// 静态数据：整群共享的轨迹角度、共享的泡泡模板与扳机输入
 		static readonly List<SardineUserController> s_fish = new List<SardineUserController>();
 		static readonly HashSet<Rigidbody> s_fishBodies = new HashSet<Rigidbody>();   // 快速判断命中的碰撞体是不是鱼
 		static GameObject s_bubbleTemplate;   // 没手动指定时，缓存按名字找到的场景泡泡模板
 		static bool s_bubbleSearched;
+		static GameObject s_shield;           // 场景里的盾牌，所有鱼共用
+		static bool s_shieldSearched;
+		static SardineUserController s_shieldOwner;   // 当前举着盾牌的那条鱼，只有它能收起盾牌
 		static InputAction s_leftTrigger;     // 左手食指扳机，所有鱼共用
 		static InputAction s_rightTrigger;    // 右手食指扳机
 
@@ -109,6 +120,10 @@ namespace JSukoAnimals
 		InteractorHandedness grabbingHand = InteractorHandedness.None;   // 抓着自己的手，用来区分左右扳机
 		float lastFireTime = -1f;                                       // 事件与轮询去重，避免一次按下射两个
 
+		// 动画：正常游动 FastSwim，抓在手里切 Idle
+		Animator fishAnimator;
+		bool hasHeldParam;
+
 		// 耐久：只在拿在手里时消耗，用完自动脱手
 		int durability;
 		GameObject durabilityBar;
@@ -117,6 +132,10 @@ namespace JSukoAnimals
 		float durabilityInnerWidth;
 		float durabilityInnerHeight;
 		Transform durabilityCamera;
+
+		// 盾牌：只有左手持鱼按扳机时显示，跟着鱼头走
+		bool shieldActive;
+		Renderer shieldRenderer;   // 用来把盾牌的可见中心对齐到目标点
 
 		bool isFlop;               // 被抓后甩飞 / 扑腾的状态
 		float flopEndTime;
@@ -177,6 +196,9 @@ namespace JSukoAnimals
 			s_fishBodies.Clear();
 			s_bubbleTemplate = null;
 			s_bubbleSearched = false;
+			s_shield = null;
+			s_shieldSearched = false;
+			s_shieldOwner = null;
 
 			DisposeAction(ref s_leftTrigger);
 			DisposeAction(ref s_rightTrigger);
@@ -228,10 +250,20 @@ namespace JSukoAnimals
 			neighborTick = Mathf.Abs(GetInstanceID()) % Mathf.Max(1, neighborInterval);
 
 			// 屏幕外时停止骨骼变换更新，降低蒙皮动画的 CPU 开销
-			Animator animator = GetComponentInChildren<Animator>();
-			if (animator != null)
+			fishAnimator = GetComponentInChildren<Animator>();
+			if (fishAnimator != null)
 			{
-				animator.cullingMode = AnimatorCullingMode.CullUpdateTransforms;
+				fishAnimator.cullingMode = AnimatorCullingMode.CullUpdateTransforms;
+
+				// 控制器里没有 Held 参数时别去 SetBool，否则每次都会刷警告
+				foreach (AnimatorControllerParameter parameter in fishAnimator.parameters)
+				{
+					if (parameter.type == AnimatorControllerParameterType.Bool && parameter.name == "Held")
+					{
+						hasHeldParam = true;
+						break;
+					}
+				}
 			}
 
 			// VR 抓取：组件缺失时自动补上
@@ -254,6 +286,10 @@ namespace JSukoAnimals
 				s_leftTrigger = CreateTriggerAction("LeftTrigger", "<XRController>{LeftHand}/{TriggerButton}");
 				s_rightTrigger = CreateTriggerAction("RightTrigger", "<XRController>{RightHand}/{TriggerButton}");
 			}
+
+			// 盾牌默认先收起来，等左手持鱼按下扳机再出现；已经有鱼举着时不要动
+			GameObject shield = GetShieldObject();
+			if (shield != null && s_shieldOwner == null) shield.SetActive(false);
 
 			// 所属鱼群：以鱼群父物体被放置的位置为圆心；组件缺失时自动补一个
 			orbitGroup = GetComponentInParent<SardineGroupOrbit>();
@@ -295,11 +331,13 @@ namespace JSukoAnimals
 			}
 
 			if (durabilityBar != null) Destroy(durabilityBar);
+			if (shieldActive) HideShield();
 		}
 
 		void OnGrabbed(SelectEnterEventArgs args)
 		{
 			isGrabbed = true;
+			SetHeld(true);
 			// 记住是哪只手抓的，之后只读这只手的扳机
 			grabbingHand = args.interactorObject.handedness;
 
@@ -322,25 +360,129 @@ namespace JSukoAnimals
 		void OnReleased(SelectExitEventArgs args)
 		{
 			isGrabbed = false;
+			SetHeld(false);
 			SetDurabilityBarVisible(false);
+			HideShield();
 			StartFlop();
+		}
+
+		// 抓在手里时切 Idle，松开回到 FastSwim
+		void SetHeld(bool held)
+		{
+			if (fishAnimator == null || !hasHeldParam) return;
+			fishAnimator.SetBool("Held", held);
 		}
 
 		void OnActivated(ActivateEventArgs args)
 		{
-			FireBubble();
+			// 左手持鱼是盾牌，右手才发泡泡
+			if (grabbingHand == InteractorHandedness.Left) ShowShield();
+			else FireBubble();
 		}
 
 		// 抓在手里时，只响应抓着自己的那只手的食指扳机
 		void Update()
 		{
-			if (!isGrabbed) return;
+			if (!isGrabbed)
+			{
+				if (shieldActive) HideShield();
+				return;
+			}
 
 			InputAction trigger = null;
 			if (grabbingHand == InteractorHandedness.Left) trigger = s_leftTrigger;
 			else if (grabbingHand == InteractorHandedness.Right) trigger = s_rightTrigger;
 
-			if (trigger != null && trigger.WasPressedThisFrame()) FireBubble();
+			if (trigger != null)
+			{
+				if (trigger.WasPressedThisFrame())
+				{
+					// 左手：按下亮出盾牌，不发射泡泡；右手：照常发射
+					if (grabbingHand == InteractorHandedness.Left) ShowShield();
+					else FireBubble();
+				}
+				else if (trigger.WasReleasedThisFrame() && shieldActive)
+				{
+					HideShield();
+				}
+			}
+
+			// 盾牌举在手上时一直跟着手走
+			if (shieldActive) UpdateShieldPose();
+		}
+
+		// 盾牌：优先用 Inspector 里指定的，没指定就在场景里按名字 Shield 找
+		GameObject GetShieldObject()
+		{
+			if (shieldObject != null) return shieldObject;
+
+			if (!s_shieldSearched)
+			{
+				s_shieldSearched = true;
+				foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+				{
+					// 只要场景里的对象（排除工程里的预制体资源），名字叫 Shield
+					if (go.name == "Shield" && go.scene.IsValid())
+					{
+						s_shield = go;
+						break;
+					}
+				}
+			}
+
+			return s_shield;
+		}
+
+		void ShowShield()
+		{
+			GameObject shield = GetShieldObject();
+			if (shield == null)
+			{
+				Debug.LogWarning("SardineUserController：没找到盾牌，请把 Hierarchy 里的 Shield 拖到 shieldObject 上，或保证它叫 Shield", this);
+				return;
+			}
+
+			shieldActive = true;
+			s_shieldOwner = this;
+			shield.SetActive(true);
+			UpdateShieldPose();
+		}
+
+		void HideShield()
+		{
+			shieldActive = false;
+
+			// 场景里只有一个盾牌，只有举着它的那条鱼能收起来；
+			// 否则另一只手松开自己的鱼时，会把这边还按着扳机的盾牌一起关掉
+			if (s_shieldOwner != null && s_shieldOwner != this) return;
+			s_shieldOwner = null;
+
+			GameObject shield = GetShieldObject();
+			if (shield != null) shield.SetActive(false);
+		}
+
+		// 盾牌挡在鱼的正前方，朝向跟着鱼头
+		void UpdateShieldPose()
+		{
+			GameObject shield = GetShieldObject();
+			if (shield == null) return;
+
+			// 和泡泡出口用同一个鱼头朝向，去掉 yawOffset 的模型修正
+			Quaternion headRot = transform.rotation * Quaternion.Euler(0f, -yawOffset, 0f);
+			Vector3 dir = headRot * Vector3.forward;
+			Vector3 target = transform.position + dir * shieldDistance;
+
+			shield.transform.rotation = headRot * Quaternion.Euler(shieldEulerOffset);
+			shield.transform.position = target;
+
+			// 盾牌模型的枢轴不在中心（ProBuilder 立方体的枢轴在角上），
+			// 直接按枢轴摆会让可见的盾面飘到一边，这里按渲染包围盒中心对齐到目标点
+			if (shieldRenderer == null) shieldRenderer = shield.GetComponentInChildren<Renderer>();
+			if (shieldRenderer != null)
+			{
+				Vector3 centerOffset = shieldRenderer.bounds.center - shield.transform.position;
+				shield.transform.position = target - centerOffset;
+			}
 		}
 
 		// 拿到泡泡模板：优先用 Inspector 里指定的，没指定就在场景里按名字找（可以是不激活的隐藏对象）
@@ -401,7 +543,7 @@ namespace JSukoAnimals
 			// 泡泡飞行时自己检测是否打到鱼，打到就让那条鱼掉下去扑腾
 			BubbleProjectile projectile = bubble.GetComponent<BubbleProjectile>();
 			if (projectile == null) projectile = bubble.AddComponent<BubbleProjectile>();
-			projectile.Setup(this, bubbleHitRadius);
+			projectile.Setup(this, bubbleHitRadius, GetShieldObject(), rb.position);
 
 			// 每成功射出一发扣一点耐久，耐久归零就从手里掉下去
 			durability--;
@@ -753,30 +895,49 @@ namespace JSukoAnimals
 	public class BubbleProjectile : MonoBehaviour
 	{
 		static readonly RaycastHit[] s_hits = new RaycastHit[16];   // 复用数组，避免每帧为检测分配内存
+		static readonly Collider[] s_overlaps = new Collider[16];
 
 		SardineUserController owner;   // 发射它的鱼，避免刚射出就打到自己
+		GameObject shield;             // 场景里的盾牌，撞上就被挡下来
 		float hitRadius = 0.28f;
-		float bornTime;
 		Vector3 lastPos;
 
-		public void Setup(SardineUserController ownerFish, float radius)
+		public void Setup(SardineUserController ownerFish, float radius, GameObject shieldObject, Vector3 muzzlePosition)
 		{
 			owner = ownerFish;
 			hitRadius = radius;
-			bornTime = Time.unscaledTime;
+			shield = shieldObject;
 			lastPos = transform.position;
+
+			// 敌人贴脸时，出生点可能已经落在它身上、甚至越过了它，
+			// 只从出生点往后扫会永远扫不到，这里补两刀：
+			// 1) 从鱼嘴到出生点扫一遍；2) 在出生点做一次重叠检测
+			Vector3 path = lastPos - muzzlePosition;
+			float pathLength = path.magnitude;
+
+			if (pathLength > 0.0001f)
+			{
+				int hitCount = Physics.SphereCastNonAlloc(muzzlePosition, hitRadius, path / pathLength, s_hits,
+					pathLength, ~0, QueryTriggerInteraction.Collide);
+
+				for (int i = 0; i < hitCount; i++)
+				{
+					if (TryHit(s_hits[i].collider)) return;
+				}
+			}
+
+			int overlapCount = Physics.OverlapSphereNonAlloc(lastPos, hitRadius, s_overlaps,
+				~0, QueryTriggerInteraction.Collide);
+
+			for (int i = 0; i < overlapCount; i++)
+			{
+				if (TryHit(s_overlaps[i])) return;
+			}
 		}
 
 		void Update()
 		{
 			Vector3 pos = transform.position;
-
-			// 刚射出的一小段时间内不判定，免得打中发射它的那条鱼
-			if (Time.unscaledTime - bornTime < 0.15f)
-			{
-				lastPos = pos;
-				return;
-			}
 
 			Vector3 delta = pos - lastPos;
 			float dist = delta.magnitude;
@@ -789,24 +950,41 @@ namespace JSukoAnimals
 
 				for (int i = 0; i < hitCount; i++)
 				{
-					SardineUserController fish = s_hits[i].collider.GetComponentInParent<SardineUserController>();
-					if (fish != null && fish != owner && fish.HitByBubble())
-					{
-						Destroy(gameObject);
-						return;
-					}
-
-					// 小怪：命中一次掉 1/3 血
-					LuffyEnemy enemy = s_hits[i].collider.GetComponentInParent<LuffyEnemy>();
-					if (enemy != null && enemy.TakeHit())
-					{
-						Destroy(gameObject);
-						return;
-					}
+					if (TryHit(s_hits[i].collider)) return;
 				}
 			}
 
 			lastPos = pos;
+		}
+
+		// 命中判定：盾牌直接挡下；鱼和小怪交给它们自己处理。返回 true 表示泡泡已被销毁
+		bool TryHit(Collider hitCollider)
+		{
+			if (hitCollider == null) return false;
+
+			// 盾牌是实心的：先判盾牌，撞上就直接消失，不再往后判伤害
+			if (shield != null && hitCollider.transform.IsChildOf(shield.transform))
+			{
+				Destroy(gameObject);
+				return true;
+			}
+
+			SardineUserController fish = hitCollider.GetComponentInParent<SardineUserController>();
+			if (fish != null && fish != owner && fish.HitByBubble())
+			{
+				Destroy(gameObject);
+				return true;
+			}
+
+			// 小怪：命中一次掉 1/3 血
+			LuffyEnemy enemy = hitCollider.GetComponentInParent<LuffyEnemy>();
+			if (enemy != null && enemy.TakeHit())
+			{
+				Destroy(gameObject);
+				return true;
+			}
+
+			return false;
 		}
 	}
 }
