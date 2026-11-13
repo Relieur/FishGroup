@@ -88,6 +88,12 @@ public class LuffyEnemy : MonoBehaviour
 	float m_BarInnerHeight;
 	Vector3 m_BarAnchorLocal;
 
+	// 供方位指示器查询：小怪当前是否存活（死亡到重生之间为 false）
+	public bool IsAlive => !m_Dead;
+
+	// 供方位指示器查询：当前血量比例 1 = 满血，0 = 空
+	public float HealthFraction => Mathf.Clamp01(1f - (float)m_Hits / Mathf.Max(1, maxHits));
+
 	// 碰撞体、刚体、抓取组件都在 Awake 里先准备好，顺序必须早于 XRGrabInteractable 缓存碰撞体
 	void Awake()
 	{
