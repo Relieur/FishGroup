@@ -1,0 +1,25 @@
+# Unity / Tuanjie YAML assets: NEVER auto-merge line-by-line.
+# Both sides editing a .scene/.prefab produces GUID-breaking merges that
+# silently corrupt the scene. Mark them as unmergeable so Git stops with a
+# conflict and we resolve it manually inside the editor instead.
+#
+# NOTE: intentionally NOT wiring the `unityyamlmerge` driver, because it is
+# not configured on every collaborator's machine; a missing driver makes the
+# merge fail hard. `-merge` alone gives us a clean, explicit conflict.
+*.unity  -merge
+*.scene  -merge
+*.prefab -merge
+*.asset  -merge
+*.mat    -merge
+
+# Binary assets
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.tga  binary
+*.psd  binary
+*.fbx  binary
+*.exr  binary
+*.wav  binary
+*.mp3  binary
+*.mp4  binary
