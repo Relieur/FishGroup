@@ -11026,13 +11026,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   target: {fileID: 0}
   distanceFromCamera: 0.65
-  followSharpness: 22
   radiusX: 0.45
   radiusY: 0.34
   arcLength: 0.16
   arcThickness: 0.026
   edgePadding: 0.045
-  arcColor: {r: 1, g: 0.22327036, b: 0.33348206, a: 1}
+  arcColor: {r: 1, g: 0.62, b: 0.66, a: 0.55}
   hideWhenEnemyDead: 1
   scanInterval: 0.35
 --- !u!1001 &634652510
@@ -14122,7 +14121,7 @@ Transform:
   m_GameObject: {fileID: 1719307020}
   serializedVersion: 2
   m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 0, y: 4.1, z: 0}
+  m_LocalPosition: {x: 0, y: 6.5, z: 0}
   m_LocalScale: {x: 200, y: 200, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

@@ -16,9 +16,6 @@ namespace VRTest.Environment
 		[Tooltip("画布离相机的距离（米）")]
 		public float distanceFromCamera = 0.65f;
 
-		[Tooltip("跟随平滑，0 = 硬跟随")]
-		public float followSharpness = 22f;
-
 		[Header("椭圆周界（米，相对相机）")]
 		[Tooltip("椭圆的水平半轴（米）")]
 		public float radiusX = 0.45f;
@@ -37,7 +34,7 @@ namespace VRTest.Environment
 		public float edgePadding = 0.045f;
 
 		[Header("颜色")]
-		public Color arcColor = new Color(1f, 0.42f, 0.50f, 1f);
+		public Color arcColor = new Color(1f, 0.62f, 0.66f, 0.55f);
 
 		[Tooltip("死亡状态下是否隐藏")]
 		public bool hideWhenEnemyDead = true;
@@ -63,6 +60,8 @@ namespace VRTest.Environment
 
 		void Awake()
 		{
+			ResolveFollow();
+			AttachToFollow();
 			BuildUI();
 		}
 
@@ -91,32 +90,23 @@ namespace VRTest.Environment
 
 		void LateUpdate()
 		{
-			ResolveFollow();
+			if (m_Follow == null) ResolveFollow();
 			if (m_Follow == null) return;
 
-			UpdatePose();
+			AttachToFollow();
 			RescanEnemies();
 			LayoutArcs();
 		}
 
-		void UpdatePose()
+		// 直接挂在相机下面，不再用插值追位置：
+		// 平滑跟随会让画布比视线慢半拍，转头时弧段看起来在抖
+		void AttachToFollow()
 		{
-			Camera cam = m_Follow.GetComponent<Camera>();
-			Transform camT = cam != null ? cam.transform : m_Follow;
+			if (transform.parent != m_Follow) transform.SetParent(m_Follow, false);
 
-			Vector3 want = camT.position + camT.forward * distanceFromCamera;
-
-			if (followSharpness <= 0f)
-			{
-				transform.position = want;
-				transform.rotation = camT.rotation;
-			}
-			else
-			{
-				float k = 1f - Mathf.Exp(-followSharpness * Time.deltaTime);
-				transform.position = Vector3.Lerp(transform.position, want, k);
-				transform.rotation = Quaternion.Slerp(transform.rotation, camT.rotation, k);
-			}
+			transform.localPosition = Vector3.forward * distanceFromCamera;
+			transform.localRotation = Quaternion.identity;
+			transform.localScale = Vector3.one;
 		}
 
 		void ResolveFollow()
