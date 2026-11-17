@@ -121,9 +121,11 @@ public class LuffyEnemy : MonoBehaviour
 		BuildBar();
 		RefreshBar();
 
-		// 记录原始姿态：之后转身只绕世界 Y 轴叠加偏航，不改变模型本身的立正方向
-		m_BaseRotation = transform.rotation;
-		m_Yaw = 0f;
+		// 记录原始姿态：只保留"立正"部分（X/Z 轴），把 Y 偏航剥出去。
+		// 否则模型自带的 Y 朝向会和 m_Yaw 叠加两次，导致移动时朝向错乱。
+		Vector3 baseEuler = transform.eulerAngles;
+		m_BaseRotation = Quaternion.Euler(baseEuler.x, 0f, baseEuler.z);
+		m_Yaw = baseEuler.y;
 	}
 
 	// 没有刚体和抓取组件就补上：拿在手里能跟着手走，松手能靠重力摔在地上

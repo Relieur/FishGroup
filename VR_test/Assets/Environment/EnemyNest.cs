@@ -83,9 +83,19 @@ namespace VRTest.Environment
 				return;
 			}
 
-			m_TargetCount = Random.Range(
-				Mathf.Max(1, minCount),
-				Mathf.Max(Mathf.Max(1, minCount), maxCount) + 1);
+			int lo = Mathf.Max(1, minCount);
+			int hi = Mathf.Max(lo, maxCount);
+
+			// 模型数量有限时，一窝最多就刷模型数那么多只，保证不重复
+			int modelCount = (enemyPrefabs != null && enemyPrefabs.Length > 0)
+				? enemyPrefabs.Length : 0;
+			if (modelCount > 0 && modelCount < hi)
+			{
+				hi = modelCount;
+				if (lo > hi) lo = hi;
+			}
+
+			m_TargetCount = Random.Range(lo, hi + 1);
 
 			SpawnAll();
 		}
@@ -193,16 +203,32 @@ namespace VRTest.Environment
 			return e;
 		}
 
-		// 从候选列表里挑一个模型；同一窝尽量不重复
+		// 从候选列表里随机挑模型；同一窝内不重复（数量超过模型数时才允许重复）
+		readonly List<GameObject> m_ShuffledPool = new List<GameObject>();
+
 		GameObject PickPrefab(int index)
 		{
-			if (enemyPrefabs != null && enemyPrefabs.Length > 0)
+			if (enemyPrefabs == null || enemyPrefabs.Length == 0) return enemyPrefab;
+
+			// 首次调用时洗牌，保证随机且不重复
+			if (m_ShuffledPool.Count == 0)
 			{
-				// 先按顺序取，超出后再随机，保证多样性
-				if (index < enemyPrefabs.Length) return enemyPrefabs[index];
-				return enemyPrefabs[Random.Range(0, enemyPrefabs.Length)];
+				m_ShuffledPool.AddRange(enemyPrefabs);
+				// Fisher-Yates 洗牌
+				for (int i = m_ShuffledPool.Count - 1; i > 0; i--)
+				{
+					int j = Random.Range(0, i + 1);
+					var tmp = m_ShuffledPool[i];
+					m_ShuffledPool[i] = m_ShuffledPool[j];
+					m_ShuffledPool[j] = tmp;
+				}
 			}
-			return enemyPrefab;
+
+			// 池子够用就直接取，用完再重新洗一轮（怪多于模型数时）
+			if (index < m_ShuffledPool.Count) return m_ShuffledPool[index];
+
+			int wrap = index % m_ShuffledPool.Count;
+			return m_ShuffledPool[wrap];
 		}
 
 		// 在巢穴周围均匀撒点，避免所有怪挤在同一个位置
