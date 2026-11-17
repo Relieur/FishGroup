@@ -3,8 +3,11 @@ using UnityEngine;
 
 namespace VRTest.Environment
 {
-	// 怪物巢穴：固定位置刷新 3~5 只怪，模型随机不重复；玩家离开后整窝复活
-	// 刻意不修改 LuffyEnemy，只负责生成/统计/复活
+	// 怪物巢穴：固定位置刷新 3~5 只怪，模型随机不重复
+	// 玩家靠近吸引仇恨；玩家离开范围后整窝复活
+	//
+	// 刻意不修改 LuffyEnemy，只通过它已有的公开字段（chasePlayer / moveSpeed）
+	// 控制警戒分级，朝向逻辑完全交给原版处理。
 	[AddComponentMenu("VR/Environment/Enemy Nest")]
 	public class EnemyNest : MonoBehaviour
 	{
@@ -18,21 +21,40 @@ namespace VRTest.Environment
 		[Tooltip("怪全部死亡后，玩家离开多久整窝复活（秒）")]
 		[Min(0f)] public float respawnDelay = 5f;
 
-		[Header("范围")]
+		[Header("刷新范围")]
 		public float spawnRadius = 3.5f;
-		public float leaveRadius = 14f;
 		public float groundRayHeight = 12f;
 		public LayerMask groundMask = ~0;
 
+		[Header("警戒与仇恨")]
+		[Tooltip("玩家进入这个半径：怪开始靠近（慢速警戒）")]
+		public float alertRadius = 16f;
+
+		[Tooltip("玩家进入这个半径：怪全速冲过来（仇恨）")]
+		public float aggroRadius = 9f;
+
+		[Tooltip("玩家离开这个半径才开始计算复活计时")]
+		public float leaveRadius = 20f;
+
+		[Tooltip("警戒状态下的移动速度倍率（相对仇恨时的全速）")]
+		[Range(0.1f, 1f)] public float alertSpeedScale = 0.45f;
+
 		[Header("模型朝向")]
-		[Tooltip("生成初始旋转，必须与场景 YG_01 一致：(270, 270, 0)")]
+		[Tooltip("生成初始旋转，必须与场景 YG_01 一致：(270, 270, 0)。不要随机化，否则会破坏 LuffyEnemy 的姿态基准")]
 		public Vector3 spawnEuler = new Vector3(270f, 270f, 0f);
 
 		[Header("调试")]
 		public bool drawGizmos = true;
 
+		public enum NestState { Idle, Alert, Combat }
+		public NestState State => m_State;
+
+		// 运行时
 		readonly List<LuffyEnemy> m_Enemies = new List<LuffyEnemy>();
 		readonly List<GameObject> m_ShufflePool = new List<GameObject>();
+		readonly List<float> m_BaseSpeed = new List<float>();
+
+		NestState m_State = NestState.Idle;
 		float m_LeaveTimer;
 		int m_TargetCount;
 		Transform m_Player;
@@ -63,6 +85,12 @@ namespace VRTest.Environment
 
 			float dist = HorizontalDistance(m_Player.position, transform.position);
 
+			// 根据距离切换状态：仇恨 > 警戒 > 游荡
+			if (dist <= aggroRadius) SetState(NestState.Combat);
+			else if (dist <= alertRadius) SetState(NestState.Alert);
+			else SetState(NestState.Idle);
+
+			// 玩家走远后计时复活
 			if (dist > leaveRadius)
 			{
 				m_LeaveTimer += Time.deltaTime;
@@ -75,12 +103,73 @@ namespace VRTest.Environment
 			else m_LeaveTimer = 0f;
 		}
 
+		// 通过 LuffyEnemy 已有的公开字段实现警戒分级，不改它的代码
+		void SetState(NestState next)
+		{
+			if (m_State == next) return;
+			m_State = next;
+
+			for (int i = 0; i < m_Enemies.Count; i++)
+			{
+				var e = m_Enemies[i];
+				if (e == null) continue;
+
+				switch (next)
+				{
+					case NestState.Idle:
+						e.chasePlayer = false;
+						RestoreSpeed(i, e);
+						break;
+
+					case NestState.Alert:
+						e.chasePlayer = true;
+						SetSpeed(i, e, alertSpeedScale);
+						break;
+
+					case NestState.Combat:
+						e.chasePlayer = true;
+						RestoreSpeed(i, e);
+						break;
+				}
+			}
+		}
+
+		void SetSpeed(int index, LuffyEnemy e, float scale)
+		{
+			EnsureBaseSpeed(index, e);
+			e.moveSpeed = m_BaseSpeed[index] * scale;
+		}
+
+		void RestoreSpeed(int index, LuffyEnemy e)
+		{
+			EnsureBaseSpeed(index, e);
+			e.moveSpeed = m_BaseSpeed[index];
+		}
+
+		void EnsureBaseSpeed(int index, LuffyEnemy e)
+		{
+			while (m_BaseSpeed.Count <= index) m_BaseSpeed.Add(-1f);
+			if (m_BaseSpeed[index] < 0f) m_BaseSpeed[index] = e.moveSpeed;
+		}
+
 		void SpawnAll()
 		{
 			for (int i = 0; i < m_TargetCount; i++)
 			{
 				var e = CreateEnemy(i);
 				if (e != null) m_Enemies.Add(e);
+			}
+			// 初始为游荡状态
+			SetStateImmediate(NestState.Idle);
+		}
+
+		void SetStateImmediate(NestState s)
+		{
+			m_State = s;
+			for (int i = 0; i < m_Enemies.Count; i++)
+			{
+				var e = m_Enemies[i];
+				if (e != null) e.chasePlayer = (s != NestState.Idle);
 			}
 		}
 
@@ -91,7 +180,7 @@ namespace VRTest.Environment
 
 			Vector3 pos = PickSpawnPosition(index, m_TargetCount);
 
-			// 统一用 YG_01 的朝向，不随机旋转：LuffyEnemy 会把初始姿态当基准
+			// 统一用 YG_01 的朝向，不随机旋转
 			Quaternion rot = Quaternion.Euler(spawnEuler);
 
 			var go = Instantiate(prefab, pos, rot);
@@ -165,7 +254,13 @@ namespace VRTest.Environment
 
 				Destroy(e.gameObject);
 				var fresh = CreateEnemy(i);
-				if (fresh != null) m_Enemies[i] = fresh;
+				if (fresh != null)
+				{
+					m_Enemies[i] = fresh;
+					// 复活后按当前状态立即设置
+					fresh.chasePlayer = (m_State != NestState.Idle);
+					if (m_State == NestState.Alert) SetSpeed(i, fresh, alertSpeedScale);
+				}
 			}
 		}
 
@@ -187,9 +282,17 @@ namespace VRTest.Environment
 		void OnDrawGizmosSelected()
 		{
 			if (!drawGizmos) return;
+
 			Gizmos.color = new Color(1f, 0.85f, 0.2f, 0.9f);
 			DrawCircle(transform.position, spawnRadius);
-			Gizmos.color = new Color(0.3f, 1f, 0.5f, 0.6f);
+
+			Gizmos.color = new Color(1f, 0.7f, 0.2f, 0.7f);
+			DrawCircle(transform.position, alertRadius);
+
+			Gizmos.color = new Color(1f, 0.3f, 0.2f, 0.9f);
+			DrawCircle(transform.position, aggroRadius);
+
+			Gizmos.color = new Color(0.3f, 1f, 0.5f, 0.5f);
 			DrawCircle(transform.position, leaveRadius);
 		}
 
