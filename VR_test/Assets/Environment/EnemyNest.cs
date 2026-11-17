@@ -3,100 +3,56 @@ using UnityEngine;
 
 namespace VRTest.Environment
 {
-	// 怪物巢穴：在固定位置刷新 3~5 只怪，成群游荡
-	// 玩家靠近吸引仇恨；玩家离开范围 5 秒后整窝复活
+	// 怪物巢穴：固定位置刷新 3~5 只怪，模型随机不重复；玩家离开后整窝复活
+	// 刻意不修改 LuffyEnemy，只负责生成/统计/复活
 	[AddComponentMenu("VR/Environment/Enemy Nest")]
 	public class EnemyNest : MonoBehaviour
 	{
 		[Header("刷新")]
-		[Tooltip("怪物预制体候选列表（YG_02/03/04/05）。注意 YG_01 是白模，不要用。每只怪从列表里随机挑一个")]
+		[Tooltip("怪物预制体候选列表（YG_02/03/04/05），YG_01 是白模不要用")]
 		public GameObject[] enemyPrefabs;
 
-		[Tooltip("兼容旧配置：列表为空时回退用这个（建议留空）")]
-		public GameObject enemyPrefab;
-
-		[Tooltip("这一窝最少几只")]
 		[Min(1)] public int minCount = 3;
-
-		[Tooltip("这一窝最多几只")]
 		[Min(1)] public int maxCount = 5;
 
-		[Tooltip("所有怪死亡后，玩家离开多久整窝复活（秒）")]
+		[Tooltip("怪全部死亡后，玩家离开多久整窝复活（秒）")]
 		[Min(0f)] public float respawnDelay = 5f;
 
 		[Header("范围")]
-		[Tooltip("刷新散布半径（米），怪会在这个圈里出生")]
 		public float spawnRadius = 3.5f;
-
-		[Tooltip("玩家进入这个半径就吸引仇恨（米）")]
-		public float aggroRadius = 9f;
-
-		[Tooltip("玩家离开这个半径，开始计时复活（米）")]
 		public float leaveRadius = 14f;
-
-		[Tooltip("贴地射线起点高度（米）")]
 		public float groundRayHeight = 12f;
-
-		[Tooltip("地面所在的层")]
 		public LayerMask groundMask = ~0;
 
+		[Header("模型朝向")]
+		[Tooltip("生成初始旋转，必须与场景 YG_01 一致：(270, 270, 0)")]
+		public Vector3 spawnEuler = new Vector3(270f, 270f, 0f);
+
 		[Header("调试")]
-		[Tooltip("在 Scene 视图画出各范围圈")]
 		public bool drawGizmos = true;
 
-		[Header("模型朝向")]
-		[Tooltip("模型的基础欧拉角，与场景里的 YG_01 保持一致：实测 eulerAngles = (270, 270, 0)")]
-		public Vector3 baseEuler = new Vector3(270f, 270f, 0f);
-
-		[Tooltip("勾选后，生成时把模型内部偏移清掉，让怪精确落在巢穴位置")]
-		public bool correctModelOffset = true;
-
-		public enum NestState { Idle, Combat, Cooldown }
-
-		// 运行时
 		readonly List<LuffyEnemy> m_Enemies = new List<LuffyEnemy>();
-		NestState m_State = NestState.Idle;
+		readonly List<GameObject> m_ShufflePool = new List<GameObject>();
 		float m_LeaveTimer;
 		int m_TargetCount;
 		Transform m_Player;
-
-		public NestState State => m_State;
-		public int AliveCount
-		{
-			get
-			{
-				int n = 0;
-				for (int i = 0; i < m_Enemies.Count; i++)
-					if (m_Enemies[i] != null && m_Enemies[i].IsAlive) n++;
-				return n;
-			}
-		}
 
 		void Start()
 		{
 			ResolvePlayer();
 
-			bool hasList = enemyPrefabs != null && enemyPrefabs.Length > 0;
-			if (!hasList && enemyPrefab == null)
+			int modelCount = (enemyPrefabs != null) ? enemyPrefabs.Length : 0;
+			if (modelCount == 0)
 			{
-				Debug.LogWarning("[Nest] " + name + " 没有指定 enemyPrefabs", this);
+				Debug.LogWarning("[Nest] " + name + " 没有配置 enemyPrefabs", this);
 				return;
 			}
 
 			int lo = Mathf.Max(1, minCount);
 			int hi = Mathf.Max(lo, maxCount);
-
-			// 模型数量有限时，一窝最多就刷模型数那么多只，保证不重复
-			int modelCount = (enemyPrefabs != null && enemyPrefabs.Length > 0)
-				? enemyPrefabs.Length : 0;
-			if (modelCount > 0 && modelCount < hi)
-			{
-				hi = modelCount;
-				if (lo > hi) lo = hi;
-			}
+			if (modelCount < hi) { hi = modelCount; if (lo > hi) lo = hi; }
 
 			m_TargetCount = Random.Range(lo, hi + 1);
-
 			SpawnAll();
 		}
 
@@ -107,51 +63,18 @@ namespace VRTest.Environment
 
 			float dist = HorizontalDistance(m_Player.position, transform.position);
 
-			switch (m_State)
+			if (dist > leaveRadius)
 			{
-				case NestState.Idle:
-				case NestState.Cooldown:
-					if (dist <= aggroRadius) EnterCombat();
-					break;
-
-				case NestState.Combat:
-					if (dist > leaveRadius)
-					{
-						// 玩家走远，开始计时
-						m_LeaveTimer += Time.deltaTime;
-						if (m_LeaveTimer >= respawnDelay)
-						{
-							m_LeaveTimer = 0f;
-							ReviveAll();
-							m_State = NestState.Idle;
-							SetAggro(false);
-						}
-					}
-					else
-					{
-						m_LeaveTimer = 0f;
-					}
-					break;
+				m_LeaveTimer += Time.deltaTime;
+				if (m_LeaveTimer >= respawnDelay)
+				{
+					m_LeaveTimer = 0f;
+					ReviveDead();
+				}
 			}
+			else m_LeaveTimer = 0f;
 		}
 
-		void EnterCombat()
-		{
-			if (m_State == NestState.Combat) return;
-			m_State = NestState.Combat;
-			m_LeaveTimer = 0f;
-			SetAggro(true);
-		}
-
-		void SetAggro(bool value)
-		{
-			for (int i = 0; i < m_Enemies.Count; i++)
-			{
-				if (m_Enemies[i] != null) m_Enemies[i].Aggro = value;
-			}
-		}
-
-		// 一次性生成整窝怪
 		void SpawnAll()
 		{
 			for (int i = 0; i < m_TargetCount; i++)
@@ -164,88 +87,61 @@ namespace VRTest.Environment
 		LuffyEnemy CreateEnemy(int index)
 		{
 			GameObject prefab = PickPrefab(index);
-			if (prefab == null)
-			{
-				Debug.LogWarning("[Nest] 没有配置怪物预制体", this);
-				return null;
-			}
+			if (prefab == null) return null;
 
 			Vector3 pos = PickSpawnPosition(index, m_TargetCount);
 
-			// 用 baseEuler 保证模型立正；只在 Y 上叠随机朝向
-			Quaternion rot = Quaternion.Euler(
-				baseEuler.x,
-				baseEuler.y + Random.Range(0f, 360f),
-				baseEuler.z);
+			// 统一用 YG_01 的朝向，不随机旋转：LuffyEnemy 会把初始姿态当基准
+			Quaternion rot = Quaternion.Euler(spawnEuler);
 
 			var go = Instantiate(prefab, pos, rot);
 			go.name = prefab.name + "_Nest" + (index + 1);
 
-			// YG 的 FBX 在预制体里带了 z 偏移，直接实例化会偏离巢穴位置
-			if (correctModelOffset && go.transform.childCount > 0)
+			// YG 的 FBX 带水平偏移，清掉让怪落在巢穴位置
+			if (go.transform.childCount > 0)
 			{
 				var child = go.transform.GetChild(0);
-				Vector3 p = child.localPosition;
-				// 只清掉水平偏移，保留高度（模型可能靠 Y 贴地）
-				child.localPosition = new Vector3(0f, p.y, 0f);
+				Vector3 lp = child.localPosition;
+				child.localPosition = new Vector3(0f, lp.y, 0f);
 			}
 
-			// YG_02~05 这些模型没有挂 LuffyEnemy，运行时补上
 			var e = go.GetComponent<LuffyEnemy>();
 			if (e == null) e = go.AddComponent<LuffyEnemy>();
-
-			// 交给巢穴托管
-			e.managedByNest = true;
-			e.useNestSpawnPoint = true;
-			e.HomePosition = transform.position;
-			e.Aggro = m_State == NestState.Combat;
-
 			return e;
 		}
 
-		// 从候选列表里随机挑模型；同一窝内不重复（数量超过模型数时才允许重复）
-		readonly List<GameObject> m_ShuffledPool = new List<GameObject>();
-
 		GameObject PickPrefab(int index)
 		{
-			if (enemyPrefabs == null || enemyPrefabs.Length == 0) return enemyPrefab;
+			if (enemyPrefabs == null || enemyPrefabs.Length == 0) return null;
 
-			// 首次调用时洗牌，保证随机且不重复
-			if (m_ShuffledPool.Count == 0)
+			if (m_ShufflePool.Count == 0)
 			{
-				m_ShuffledPool.AddRange(enemyPrefabs);
-				// Fisher-Yates 洗牌
-				for (int i = m_ShuffledPool.Count - 1; i > 0; i--)
+				m_ShufflePool.AddRange(enemyPrefabs);
+				for (int i = m_ShufflePool.Count - 1; i > 0; i--)
 				{
 					int j = Random.Range(0, i + 1);
-					var tmp = m_ShuffledPool[i];
-					m_ShuffledPool[i] = m_ShuffledPool[j];
-					m_ShuffledPool[j] = tmp;
+					var tmp = m_ShufflePool[i];
+					m_ShufflePool[i] = m_ShufflePool[j];
+					m_ShufflePool[j] = tmp;
 				}
 			}
 
-			// 池子够用就直接取，用完再重新洗一轮（怪多于模型数时）
-			if (index < m_ShuffledPool.Count) return m_ShuffledPool[index];
-
-			int wrap = index % m_ShuffledPool.Count;
-			return m_ShuffledPool[wrap];
+			return m_ShufflePool[index % m_ShufflePool.Count];
 		}
 
-		// 在巢穴周围均匀撒点，避免所有怪挤在同一个位置
 		Vector3 PickSpawnPosition(int index, int total)
 		{
 			float baseAngle = 360f / Mathf.Max(1, total) * index;
 			float jitter = Random.Range(-18f, 18f);
 			float rad = (baseAngle + jitter) * Mathf.Deg2Rad;
 
-			// 内外两圈，避免全部落在同一半径上
 			float r = spawnRadius * (index % 2 == 0 ? 0.55f : 1f);
 			r *= Random.Range(0.85f, 1.15f);
 
-			Vector3 p = transform.position + new Vector3(
+			Vector3 pnt = transform.position + new Vector3(
 				Mathf.Sin(rad) * r, 0f, Mathf.Cos(rad) * r);
 
-			return SnapToGround(p);
+			return SnapToGround(pnt);
 		}
 
 		Vector3 SnapToGround(Vector3 point)
@@ -259,19 +155,17 @@ namespace VRTest.Environment
 			return point;
 		}
 
-		// 玩家离开足够久后，整窝恢复到满员
-		void ReviveAll()
+		void ReviveDead()
 		{
 			for (int i = 0; i < m_Enemies.Count; i++)
 			{
 				var e = m_Enemies[i];
 				if (e == null) continue;
-				if (!e.IsAlive)
-				{
-					e.TeleportTo(PickSpawnPosition(i, m_Enemies.Count));
-					e.HomePosition = transform.position;
-					e.Revive();
-				}
+				if (e.IsAlive) continue;
+
+				Destroy(e.gameObject);
+				var fresh = CreateEnemy(i);
+				if (fresh != null) m_Enemies[i] = fresh;
 			}
 		}
 
@@ -293,13 +187,8 @@ namespace VRTest.Environment
 		void OnDrawGizmosSelected()
 		{
 			if (!drawGizmos) return;
-
 			Gizmos.color = new Color(1f, 0.85f, 0.2f, 0.9f);
 			DrawCircle(transform.position, spawnRadius);
-
-			Gizmos.color = new Color(1f, 0.35f, 0.25f, 0.9f);
-			DrawCircle(transform.position, aggroRadius);
-
 			Gizmos.color = new Color(0.3f, 1f, 0.5f, 0.6f);
 			DrawCircle(transform.position, leaveRadius);
 		}

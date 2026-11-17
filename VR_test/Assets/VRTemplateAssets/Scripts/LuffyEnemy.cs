@@ -15,12 +15,6 @@ public class LuffyEnemy : MonoBehaviour
 	[Tooltip("死亡后隔多久重新出现在玩家视野内（秒）")]
 	public float respawnDelay = 3f;
 
-	[Header("巢穴托管")]
-	[Tooltip("勾选后由 EnemyNest 统一管理刷新与复活，自己不再随机换位置、也不再定时自愈")]
-	public bool managedByNest = false;
-	[Tooltip("由巢穴指定出生点时，强制移动到该位置（不勾选自用 Inspector 里的位置）")]
-	public bool useNestSpawnPoint = true;
-
 	[Header("随机出现在玩家视野内")]
 	[Tooltip("取消勾选后不会自动改变位置，只保留血条与受击逻辑")]
 	public bool spawnInView = true;
@@ -115,31 +109,13 @@ public class LuffyEnemy : MonoBehaviour
 		m_Camera = FindCamera();
 		m_PlayerRoot = m_Camera != null ? m_Camera.root : null;
 
-		// 巢穴托管时，出生位置由巢穴决定，这里不要再随机换位
-		if (!managedByNest) PlaceInPlayerView();
-
+		PlaceInPlayerView();
 		BuildBar();
 		RefreshBar();
 
-		// 自动立正 + 归一化朝向。
-		// 这个模型（YG.fbx，bakeAxisConversion=0）在 Unity 里是"侧躺"的：
-		//   自身 up 指向世界 +X，自身 forward 指向世界 +Y。
-		// 直接用原始旋转会让它一直侧着游，所以这里用 up 向量把模型扶正，
-		// 再把水平朝向剥离到 m_Yaw（m_BaseRotation 只保留"立正"部分）。
-		Quaternion upright = Quaternion.FromToRotation(transform.up, Vector3.up) * transform.rotation;
-
-		Vector3 flatForward = upright * Vector3.forward;
-		flatForward.y = 0f;
-
-		float yaw0 = flatForward.sqrMagnitude > 0.0001f
-			? Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg
-			: 0f;
-
-		m_BaseRotation = Quaternion.AngleAxis(-yaw0, Vector3.up) * upright;
-		m_Yaw = yaw0;
-
-		// 立正后立即应用，避免第一帧还是歪的
-		transform.rotation = Quaternion.AngleAxis(m_Yaw, Vector3.up) * m_BaseRotation;
+		// 记录原始姿态：之后转身只绕世界 Y 轴叠加偏航，不改变模型本身的立正方向
+		m_BaseRotation = transform.rotation;
+		m_Yaw = 0f;
 	}
 
 	// 没有刚体和抓取组件就补上：拿在手里能跟着手走，松手能靠重力摔在地上
@@ -280,24 +256,20 @@ public class LuffyEnemy : MonoBehaviour
 	{
 		if (m_Dead)
 		{
-			// 巢穴托管时不自愈，由巢穴在合适时机调用 Revive()
-			if (managedByNest) return;
-
 			if (Time.time < m_RespawnTime) return;
 
 			// 复活：回到满血，并在玩家视野里换一个随机位置
-			Revive();
+			m_Dead = false;
+			m_Hits = 0f;
+			ResetThrownState();
+			SetVisible(true);
+			RefreshBar();
 			PlaceInPlayerView();
 			return;
 		}
 
 		// 被拿在手里或还在空中飞的时候不自己走
-		// 巢穴托管时，只有进入仇恨状态才追击；否则在巢穴附近游荡
-		bool shouldChase = chasePlayer && !m_Grabbed && !m_Thrown;
-		if (managedByNest && !Aggro) shouldChase = false;
-
-		if (shouldChase) ChasePlayer();
-		else if (managedByNest && !m_Grabbed && !m_Thrown) WanderNearHome();
+		if (chasePlayer && !m_Grabbed && !m_Thrown) ChasePlayer();
 
 		if (m_Thrown) CheckThrowLanding();
 
@@ -333,40 +305,6 @@ public class LuffyEnemy : MonoBehaviour
 		{
 			float step = Mathf.Min(moveSpeed * Time.deltaTime, distance - stopDistance);
 			transform.position += direction * step;
-		}
-	}
-
-	// 未进入战斗时，在巢穴附近缓慢游荡（绕 HomePosition 打转）
-	float m_WanderAngle;
-	float m_WanderSpeed = 0.35f;
-
-	void WanderNearHome()
-	{
-		if (!useNestSpawnPoint) return;
-
-		// 每只怪起始角度不同，避免聚成一团
-		if (m_WanderAngle == 0f) m_WanderAngle = Random.Range(0f, 360f);
-
-		m_WanderAngle += m_WanderSpeed * 20f * Time.deltaTime;
-
-		float radius = 2.5f;
-		float rad = m_WanderAngle * Mathf.Deg2Rad;
-		Vector3 target = HomePosition + new Vector3(
-			Mathf.Sin(rad) * radius, 0f, Mathf.Cos(rad) * radius);
-
-		Vector3 toTarget = target - transform.position;
-		toTarget.y = 0f;
-
-		float dist = toTarget.magnitude;
-		if (dist > 0.05f)
-		{
-			Vector3 dir = toTarget / dist;
-			float step = Mathf.Min(moveSpeed * 0.5f * Time.deltaTime, dist);
-			transform.position += dir * step;
-
-			float targetYaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg + facingYawOffset;
-			m_Yaw = Mathf.LerpAngle(m_Yaw, targetYaw, Mathf.Clamp01(turnSpeed * 0.5f * Time.deltaTime));
-			transform.rotation = Quaternion.AngleAxis(m_Yaw, Vector3.up) * m_BaseRotation;
 		}
 	}
 
@@ -417,36 +355,6 @@ public class LuffyEnemy : MonoBehaviour
 		if (m_Grabbed) DropFromHand();
 		ResetThrownState();
 		SetVisible(false);
-	}
-
-	// ---- 巢穴接口 ----
-
-	// 复活：满血、重新可见。位置由调用方（巢穴）负责摆放
-	public void Revive()
-	{
-		m_Dead = false;
-		m_Hits = 0f;
-		ResetThrownState();
-		SetVisible(true);
-		RefreshBar();
-	}
-
-	// 巢穴设定的巡逻中心，用于限制游荡范围
-	public Vector3 HomePosition { get; set; }
-
-	// 是否处于战斗状态（由巢穴控制是否追击）
-	public bool Aggro { get; set; }
-
-	// 把怪立即移动到指定位置（绕过自主出生逻辑）
-	public void TeleportTo(Vector3 worldPos)
-	{
-		transform.position = worldPos;
-	}
-
-	// 立即死亡（供调试或特殊逻辑调用）
-	public void KillNow()
-	{
-		if (!m_Dead) Die();
 	}
 
 	// 取消物理和摔伤状态，回到脚本驱动移动
