@@ -9,7 +9,10 @@ namespace VRTest.Environment
 	public class EnemyNest : MonoBehaviour
 	{
 		[Header("刷新")]
-		[Tooltip("怪物预制体（YG_01）")]
+		[Tooltip("怪物预制体候选列表（YG_02/03/04/05）。注意 YG_01 是白模，不要用。每只怪从列表里随机挑一个")]
+		public GameObject[] enemyPrefabs;
+
+		[Tooltip("兼容旧配置：列表为空时回退用这个（建议留空）")]
 		public GameObject enemyPrefab;
 
 		[Tooltip("这一窝最少几只")]
@@ -41,6 +44,13 @@ namespace VRTest.Environment
 		[Tooltip("在 Scene 视图画出各范围圈")]
 		public bool drawGizmos = true;
 
+		[Header("模型朝向")]
+		[Tooltip("模型的基础欧拉角，与场景里的 YG_01 保持一致：实测 eulerAngles = (270, 270, 0)")]
+		public Vector3 baseEuler = new Vector3(270f, 270f, 0f);
+
+		[Tooltip("勾选后，生成时把模型内部偏移清掉，让怪精确落在巢穴位置")]
+		public bool correctModelOffset = true;
+
 		public enum NestState { Idle, Combat, Cooldown }
 
 		// 运行时
@@ -66,9 +76,10 @@ namespace VRTest.Environment
 		{
 			ResolvePlayer();
 
-			if (enemyPrefab == null)
+			bool hasList = enemyPrefabs != null && enemyPrefabs.Length > 0;
+			if (!hasList && enemyPrefab == null)
 			{
-				Debug.LogWarning("[Nest] " + name + " 没有指定 enemyPrefab", this);
+				Debug.LogWarning("[Nest] " + name + " 没有指定 enemyPrefabs", this);
 				return;
 			}
 
@@ -142,17 +153,36 @@ namespace VRTest.Environment
 
 		LuffyEnemy CreateEnemy(int index)
 		{
-			Vector3 pos = PickSpawnPosition(index, m_TargetCount);
-			var go = Instantiate(enemyPrefab, pos, Quaternion.Euler(0f, Random.Range(0f, 360f), 0f));
-			go.name = enemyPrefab.name + "_Nest" + (index + 1);
-
-			var e = go.GetComponent<LuffyEnemy>();
-			if (e == null)
+			GameObject prefab = PickPrefab(index);
+			if (prefab == null)
 			{
-				Debug.LogWarning("[Nest] 预制体上没有 LuffyEnemy 组件", this);
-				Destroy(go);
+				Debug.LogWarning("[Nest] 没有配置怪物预制体", this);
 				return null;
 			}
+
+			Vector3 pos = PickSpawnPosition(index, m_TargetCount);
+
+			// 用 baseEuler 保证模型立正；只在 Y 上叠随机朝向
+			Quaternion rot = Quaternion.Euler(
+				baseEuler.x,
+				baseEuler.y + Random.Range(0f, 360f),
+				baseEuler.z);
+
+			var go = Instantiate(prefab, pos, rot);
+			go.name = prefab.name + "_Nest" + (index + 1);
+
+			// YG 的 FBX 在预制体里带了 z 偏移，直接实例化会偏离巢穴位置
+			if (correctModelOffset && go.transform.childCount > 0)
+			{
+				var child = go.transform.GetChild(0);
+				Vector3 p = child.localPosition;
+				// 只清掉水平偏移，保留高度（模型可能靠 Y 贴地）
+				child.localPosition = new Vector3(0f, p.y, 0f);
+			}
+
+			// YG_02~05 这些模型没有挂 LuffyEnemy，运行时补上
+			var e = go.GetComponent<LuffyEnemy>();
+			if (e == null) e = go.AddComponent<LuffyEnemy>();
 
 			// 交给巢穴托管
 			e.managedByNest = true;
@@ -161,6 +191,18 @@ namespace VRTest.Environment
 			e.Aggro = m_State == NestState.Combat;
 
 			return e;
+		}
+
+		// 从候选列表里挑一个模型；同一窝尽量不重复
+		GameObject PickPrefab(int index)
+		{
+			if (enemyPrefabs != null && enemyPrefabs.Length > 0)
+			{
+				// 先按顺序取，超出后再随机，保证多样性
+				if (index < enemyPrefabs.Length) return enemyPrefabs[index];
+				return enemyPrefabs[Random.Range(0, enemyPrefabs.Length)];
+			}
+			return enemyPrefab;
 		}
 
 		// 在巢穴周围均匀撒点，避免所有怪挤在同一个位置
