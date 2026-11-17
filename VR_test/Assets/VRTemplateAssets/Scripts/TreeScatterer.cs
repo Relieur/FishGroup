@@ -48,6 +48,23 @@ public class TreeScatterer : MonoBehaviour
 	[Tooltip("0 表示每次运行都随机；填非 0 可以复现同一批位置")]
 	public int randomSeed = 0;
 
+	[Header("避让装饰物")]
+	[Tooltip("物体名字（含父级）包含这些关键字时，不在它附近生成树；多个用逗号分隔，不区分大小写")]
+	public string avoidNameKeywords = "coral,seaweed,kelp,珊瑚,水草";
+	[Tooltip("避让范围在物体包围盒之外再多留的距离（米）")]
+	public float avoidPadding = 1.5f;
+	[Tooltip("额外指定要避让的物体（其下所有渲染器的包围盒都算，可留空）")]
+	public Transform[] avoidObjects;
+
+	// 俯视投影上的一个圆形避让区域
+	struct AvoidCircle
+	{
+		public Vector2 center;
+		public float radius;
+	}
+
+	readonly List<AvoidCircle> avoidCircles = new List<AvoidCircle>();
+
 	void Awake()
 	{
 		Scatter();
@@ -68,6 +85,9 @@ public class TreeScatterer : MonoBehaviour
 			templates[i] = transform.GetChild(i);
 
 		System.Random rng = new System.Random(randomSeed != 0 ? randomSeed : System.Environment.TickCount);
+
+		// 先把场景里手动摆的珊瑚、水草等装饰收集成避让区域
+		CollectAvoidCircles();
 
 		Vector3 center = useOwnPositionAsCenter ? transform.position : areaCenter;
 		List<Vector3> placed = new List<Vector3>();
@@ -143,9 +163,13 @@ public class TreeScatterer : MonoBehaviour
 			}
 		}
 
-		Vector3 last = RandomPoint(rng, center, fallbackY);
-		last.y = ResolveGroundHeight(last, fallbackY);
-		return last;
+		// 兜底：间距实在排不开时，至少别落进珊瑚、水草里
+		Vector3 fallback = RandomPoint(rng, center, fallbackY);
+		for (int i = 0; i < placementAttempts * 4 && InsideAvoidArea(fallback); i++)
+			fallback = RandomPoint(rng, center, fallbackY);
+
+		fallback.y = ResolveGroundHeight(fallback, fallbackY);
+		return fallback;
 	}
 
 	Vector3 RandomPoint(System.Random rng, Vector3 center, float fallbackY)
@@ -158,6 +182,8 @@ public class TreeScatterer : MonoBehaviour
 
 	bool CanPlace(Vector3 candidate, List<Vector3> placed)
 	{
+		if (InsideAvoidArea(candidate)) return false;
+
 		if (placed == null) return true;
 
 		float minSqr = minSpacing * minSpacing;
@@ -170,6 +196,97 @@ public class TreeScatterer : MonoBehaviour
 		}
 
 		return true;
+	}
+
+	// 候选点是否落在珊瑚、水草等装饰的避让范围内
+	bool InsideAvoidArea(Vector3 candidate)
+	{
+		for (int i = 0; i < avoidCircles.Count; i++)
+		{
+			AvoidCircle circle = avoidCircles[i];
+			float dx = circle.center.x - candidate.x;
+			float dz = circle.center.y - candidate.z;
+			if (dx * dx + dz * dz < circle.radius * circle.radius)
+				return true;
+		}
+
+		return false;
+	}
+
+	// 按关键字扫场景里手动摆放的装饰，用它们的包围盒生成避让圆
+	void CollectAvoidCircles()
+	{
+		avoidCircles.Clear();
+
+		string[] keywords = ParseKeywords(avoidNameKeywords);
+		if (keywords.Length > 0)
+		{
+			Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+			for (int i = 0; i < renderers.Length; i++)
+			{
+				Renderer r = renderers[i];
+				if (r == null) continue;
+				if (r.transform.IsChildOf(transform)) continue;   // 自己这个散布组不算
+				if (!NameMatches(r.transform, keywords)) continue;
+
+				AddAvoidCircle(r.bounds);
+			}
+		}
+
+		// 手动指定的物体：整棵子树的包围盒都算
+		if (avoidObjects != null)
+		{
+			for (int i = 0; i < avoidObjects.Length; i++)
+			{
+				Transform target = avoidObjects[i];
+				if (target == null) continue;
+
+				Renderer[] renderers = target.GetComponentsInChildren<Renderer>();
+				for (int j = 0; j < renderers.Length; j++)
+					AddAvoidCircle(renderers[j].bounds);
+			}
+		}
+	}
+
+	void AddAvoidCircle(Bounds bounds)
+	{
+		avoidCircles.Add(new AvoidCircle
+		{
+			center = new Vector2(bounds.center.x, bounds.center.z),
+			// 用包围盒水平方向的对角半径，保证任何朝向的模型都被完整覆盖
+			radius = Mathf.Sqrt(bounds.extents.x * bounds.extents.x + bounds.extents.z * bounds.extents.z) + avoidPadding
+		});
+	}
+
+	static string[] ParseKeywords(string raw)
+	{
+		if (string.IsNullOrWhiteSpace(raw)) return new string[0];
+
+		string[] parts = raw.Split(new[] { ',', '，', ';', '；' }, System.StringSplitOptions.RemoveEmptyEntries);
+		List<string> keywords = new List<string>();
+		for (int i = 0; i < parts.Length; i++)
+		{
+			string keyword = parts[i].Trim().ToLowerInvariant();
+			if (keyword.Length > 0) keywords.Add(keyword);
+		}
+
+		return keywords.ToArray();
+	}
+
+	// 物体自身或任意父级名字命中关键字就算
+	static bool NameMatches(Transform target, string[] keywords)
+	{
+		Transform current = target;
+		for (int depth = 0; current != null && depth < 8; depth++, current = current.parent)
+		{
+			string name = current.name.ToLowerInvariant();
+			for (int i = 0; i < keywords.Length; i++)
+			{
+				if (name.Contains(keywords[i])) return true;
+			}
+		}
+
+		return false;
 	}
 
 	// 取地面上最远（最低）的一个命中点，避免打到树自己的碰撞体

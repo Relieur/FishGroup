@@ -8,9 +8,21 @@ public class PlayerScoreBoard : MonoBehaviour
 {
 	// 杀一只小怪得多少分
 	public static int pointsPerKill = 10;
-	static int s_Kills;
+	// 升级消耗：第一次 10 分，之后每升一级多花 2 分
+	public static int upgradeBaseCost = 10;
+	public static int upgradeCostStep = 2;
 
-	public static int Score => s_Kills * pointsPerKill;
+	static int s_Kills;
+	static int s_Spent;
+	static int s_UpgradeLevel;
+
+	public static int Score => s_Kills * pointsPerKill - s_Spent;
+
+	// 已升级次数
+	public static int UpgradeLevel => s_UpgradeLevel;
+
+	// 下一次升级要花多少分
+	public static int NextUpgradeCost => upgradeBaseCost + upgradeCostStep * s_UpgradeLevel;
 
 	// 小怪死亡时调用
 	public static void NotifyKill()
@@ -18,37 +30,65 @@ public class PlayerScoreBoard : MonoBehaviour
 		s_Kills++;
 	}
 
+	// 花积分升级；分数不够返回 false
+	public static bool TryUpgrade()
+	{
+		int cost = NextUpgradeCost;
+		if (Score < cost) return false;
+
+		s_Spent += cost;
+		s_UpgradeLevel++;
+		return true;
+	}
+
 	// 关闭“域重载”时静态数据会跨播放保留，进游戏时清零
 	[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
 	static void ResetStatics()
 	{
 		s_Kills = 0;
+		s_Spent = 0;
+		s_UpgradeLevel = 0;
 		pointsPerKill = 10;
+		upgradeBaseCost = 10;
+		upgradeCostStep = 2;
 	}
 
 	[Header("面板布局")]
 	[Tooltip("面板宽度（米）")]
 	public float panelWidth = 0.5f;
 	[Tooltip("面板高度（米）")]
-	public float panelHeight = 0.3f;
+	public float panelHeight = 0.42f;
 	[Tooltip("面板离相机的距离（米）")]
 	public float distanceFromCamera = 0.9f;
 	[Tooltip("面板相对视线的高度偏移（米），负数往下")]
-	public float verticalOffset = -0.12f;
+	public float verticalOffset = -0.1f;
 
 	[Header("样式")]
 	[Tooltip("背景色（默认纯半透明黑）")]
 	public Color backgroundColor = new Color(0f, 0f, 0f, 0.6f);
 	public Color labelColor = new Color(1f, 1f, 1f, 0.7f);
 	public Color scoreColor = Color.white;
+	public Color buttonColor = new Color(0.16f, 0.52f, 0.85f, 0.85f);
 	public int labelFontSize = 34;
-	public int scoreFontSize = 90;
+	public int scoreFontSize = 76;
+	public int buttonFontSize = 30;
 
-	InputAction showAction;   // 左手 Y 键
+	// 画布基准宽度（画布单位），面板尺寸按米配置时用它换算
+	const float k_BaseWidth = 400f;
+
+	InputAction showAction;     // 左手 Y 键
+	InputAction upgradeAction;  // 右手 B 键（编辑器里用 U 键）
 	GameObject panel;
+	Canvas canvas;
+	Camera cachedCamera;
 	Text scoreText;
-	Transform cameraTransform;
+	Text levelText;
+	Text upgradeText;
+	Button upgradeButton;
 	bool visible;
+	int lastScore = int.MinValue;
+	int lastCost = int.MinValue;
+	float hintUntil;
 
 	static Font s_Font;
 
@@ -61,7 +101,15 @@ public class PlayerScoreBoard : MonoBehaviour
 		showAction.AddBinding("<Keyboard>/y");
 		showAction.Enable();
 
+		// 升级按钮：右手 B 键。注意别用 A —— XRI 默认把右手 A 绑成跳跃，按一下人会跳起来
+		upgradeAction = new InputAction("ScoreUpgrade", InputActionType.Button,
+			"<XRController>{RightHand}/secondaryButton");
+		upgradeAction.AddBinding("<Keyboard>/u");
+		upgradeAction.Enable();
+
+		// 图片/文字用的画布基准宽度，实际尺寸按米换算
 		BuildPanel();
+		AttachToCamera();
 		panel.SetActive(false);
 	}
 
@@ -69,13 +117,30 @@ public class PlayerScoreBoard : MonoBehaviour
 	{
 		if (showAction != null && showAction.WasPressedThisFrame())
 			SetVisible(!visible);
+
+		if (visible && upgradeAction != null && upgradeAction.WasPressedThisFrame())
+			OnUpgradePressed();
+
+		// “分数不足”提示到点后恢复按钮文字
+		if (hintUntil > 0f && Time.time >= hintUntil)
+		{
+			hintUntil = 0f;
+			lastCost = int.MinValue;
+			RefreshUpgradeText();
+		}
 	}
 
 	// 面板始终跟在视线前方，并且正对玩家
 	void LateUpdate()
 	{
 		if (!visible || panel == null) return;
-		FollowCamera();
+
+		// 相机可能被换掉（重新进场景），保证面板始终挂在当前相机下
+		if (cachedCamera == null || panel.transform.parent != cachedCamera.transform)
+			AttachToCamera();
+
+		// 分数变了才刷新文字，避免每帧产生字符串垃圾
+		if (Score != lastScore) RefreshText();
 	}
 
 	void SetVisible(bool value)
@@ -87,43 +152,82 @@ public class PlayerScoreBoard : MonoBehaviour
 		if (value)
 		{
 			RefreshText();
-			FollowCamera();
+			RefreshUpgradeText();
+			AttachToCamera();
 		}
 	}
 
-	void FollowCamera()
+	// 面板直接挂在相机下面，不再每帧写世界坐标：
+	// XR 相机的最终位姿在 LateUpdate 之后才更新，用世界坐标追会让面板比视线慢半拍，
+	// 转头 / 点按钮时面板看着就在跳。挂成相机的子物体就完全跟着视线走。
+	void AttachToCamera()
 	{
-		if (cameraTransform == null)
+		if (cachedCamera == null)
 		{
-			Camera cam = Camera.main;
-			if (cam == null) cam = FindFirstObjectByType<Camera>();
-			if (cam == null) return;
-			cameraTransform = cam.transform;
+			cachedCamera = Camera.main;
+			if (cachedCamera == null) cachedCamera = FindFirstObjectByType<Camera>();
+			if (cachedCamera == null) return;
 		}
 
-		Vector3 pos = cameraTransform.position
-			+ cameraTransform.forward * distanceFromCamera
-			+ cameraTransform.up * verticalOffset;
+		if (panel.transform.parent != cachedCamera.transform)
+			panel.transform.SetParent(cachedCamera.transform, false);
 
-		panel.transform.position = pos;
-		panel.transform.rotation = Quaternion.LookRotation(pos - cameraTransform.position, Vector3.up);
+		// 相机本地坐标：正前方 distanceFromCamera，上下偏移 verticalOffset
+		panel.transform.localPosition = new Vector3(0f, verticalOffset, distanceFromCamera);
+		panel.transform.localRotation = Quaternion.identity;
+
+		float scale = Mathf.Max(0.0001f, panelWidth) / k_BaseWidth;
+		panel.transform.localScale = new Vector3(scale, scale, scale);
+
+		// 世界空间画布必须指定事件相机，鼠标点击才能落到按钮上（编辑器里可直接点）
+		if (canvas != null) canvas.worldCamera = cachedCamera;
 	}
 
 	void RefreshText()
 	{
+		lastScore = Score;
 		if (scoreText != null) scoreText.text = Score.ToString();
+		RefreshUpgradeText();
+	}
+
+	void RefreshUpgradeText()
+	{
+		int cost = NextUpgradeCost;
+		bool affordable = Score >= cost;
+
+		if (levelText != null) levelText.text = "等级 Lv." + UpgradeLevel;
+		if (upgradeButton != null) upgradeButton.interactable = affordable;
+
+		if (upgradeText != null && lastCost != cost)
+		{
+			lastCost = cost;
+			upgradeText.text = "升级 " + cost + " 分";
+		}
+	}
+
+	void OnUpgradePressed()
+	{
+		if (!TryUpgrade())
+		{
+			// 分数不够：按钮本身就是灰的，这里再给个文字提示
+			if (upgradeText != null) upgradeText.text = "分数不足";
+			hintUntil = Time.time + 1f;
+			return;
+		}
+
+		RefreshText();
+		RefreshUpgradeText();
 	}
 
 	void BuildPanel()
 	{
-		panel = new GameObject("ScorePanel", typeof(RectTransform), typeof(Canvas));
-		Canvas canvas = panel.GetComponent<Canvas>();
+		panel = new GameObject("ScorePanel", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
+		canvas = panel.GetComponent<Canvas>();
 		canvas.renderMode = RenderMode.WorldSpace;
 		canvas.sortingOrder = 20;
 
 		RectTransform root = panel.GetComponent<RectTransform>();
-		// 尺寸按米配置，换算成画布单位（画布基准宽度 400）
-		const float k_BaseWidth = 400f;
+		// 尺寸按米配置，换算成画布单位（画布基准宽度 k_BaseWidth）
 		float scale = Mathf.Max(0.0001f, panelWidth) / k_BaseWidth;
 		panel.transform.localScale = new Vector3(scale, scale, scale);
 
@@ -137,12 +241,45 @@ public class PlayerScoreBoard : MonoBehaviour
 		CreateImage("Background", backgroundColor, new Vector2(k_BaseWidth, rectHeight), Vector2.zero);
 
 		Text label = CreateText("Label", labelFontSize, labelColor,
-			new Vector2(0f, rectHeight * 0.22f), rectHeight * 0.34f);
+			new Vector2(0f, rectHeight * 0.36f), rectHeight * 0.18f);
 		label.text = "得分";
 
 		scoreText = CreateText("Score", scoreFontSize, scoreColor,
-			new Vector2(0f, -rectHeight * 0.12f), rectHeight * 0.62f);
+			new Vector2(0f, rectHeight * 0.145f), rectHeight * 0.3f);
 		scoreText.text = "0";
+
+		levelText = CreateText("Level", 28, labelColor,
+			new Vector2(0f, -rectHeight * 0.095f), rectHeight * 0.16f);
+		levelText.text = "等级 Lv.0";
+
+		CreateUpgradeButton(rectHeight);
+	}
+
+	void CreateUpgradeButton(float rectHeight)
+	{
+		GameObject go = new GameObject("UpgradeButton",
+			typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+		go.transform.SetParent(panel.transform, false);
+
+		RectTransform rect = go.GetComponent<RectTransform>();
+		rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+		rect.pivot = new Vector2(0.5f, 0.5f);
+		rect.anchoredPosition = new Vector2(0f, -rectHeight * 0.31f);
+		rect.sizeDelta = new Vector2(300f, rectHeight * 0.18f);
+
+		Image image = go.GetComponent<Image>();
+		image.color = buttonColor;
+		image.raycastTarget = true;
+
+		upgradeButton = go.GetComponent<Button>();
+		upgradeButton.targetGraphic = image;
+		// 分数不够时按钮自动变灰（interactable = false）
+		upgradeButton.onClick.AddListener(OnUpgradePressed);
+
+		upgradeText = CreateText("UpgradeLabel", buttonFontSize, Color.white,
+			Vector2.zero, rectHeight * 0.18f, go.transform);
+		upgradeText.rectTransform.sizeDelta = new Vector2(300f, rectHeight * 0.18f);
+		upgradeText.text = "升级 " + NextUpgradeCost + " 分";
 	}
 
 	void CreateImage(string name, Color color, Vector2 size, Vector2 anchoredPos)
@@ -161,10 +298,10 @@ public class PlayerScoreBoard : MonoBehaviour
 		image.raycastTarget = false;
 	}
 
-	Text CreateText(string name, int fontSize, Color color, Vector2 anchoredPos, float height)
+	Text CreateText(string name, int fontSize, Color color, Vector2 anchoredPos, float height, Transform parent = null)
 	{
 		GameObject go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
-		go.transform.SetParent(panel.transform, false);
+		go.transform.SetParent(parent != null ? parent : panel.transform, false);
 
 		RectTransform rect = go.GetComponent<RectTransform>();
 		rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -197,6 +334,13 @@ public class PlayerScoreBoard : MonoBehaviour
 			showAction.Disable();
 			showAction.Dispose();
 			showAction = null;
+		}
+
+		if (upgradeAction != null)
+		{
+			upgradeAction.Disable();
+			upgradeAction.Dispose();
+			upgradeAction = null;
 		}
 
 		if (panel != null) Destroy(panel);
