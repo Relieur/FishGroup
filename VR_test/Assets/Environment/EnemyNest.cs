@@ -196,6 +196,15 @@ namespace VRTest.Environment
 
 			var e = go.GetComponent<LuffyEnemy>();
 			if (e == null) e = go.AddComponent<LuffyEnemy>();
+
+			// 关键 1：LuffyEnemy.Start() 会调用 PlaceInPlayerView() 把怪搬到玩家附近，
+			// 这里必须先关掉，否则巢穴刷出来的怪会全部跑到玩家面前。
+			e.spawnInView = false;
+
+			// 关键 2：LuffyEnemy 死亡后会自动复活（respawnDelay 秒后原地满血重现）。
+			// 复活由巢穴统一管理，这里把它的自愈推到很远，避免两套复活打架。
+			e.respawnDelay = 99999f;
+
 			return e;
 		}
 
