@@ -121,11 +121,25 @@ public class LuffyEnemy : MonoBehaviour
 		BuildBar();
 		RefreshBar();
 
-		// 记录原始姿态：只保留"立正"部分（X/Z 轴），把 Y 偏航剥出去。
-		// 否则模型自带的 Y 朝向会和 m_Yaw 叠加两次，导致移动时朝向错乱。
-		Vector3 baseEuler = transform.eulerAngles;
-		m_BaseRotation = Quaternion.Euler(baseEuler.x, 0f, baseEuler.z);
-		m_Yaw = baseEuler.y;
+		// 自动立正 + 归一化朝向。
+		// 这个模型（YG.fbx，bakeAxisConversion=0）在 Unity 里是"侧躺"的：
+		//   自身 up 指向世界 +X，自身 forward 指向世界 +Y。
+		// 直接用原始旋转会让它一直侧着游，所以这里用 up 向量把模型扶正，
+		// 再把水平朝向剥离到 m_Yaw（m_BaseRotation 只保留"立正"部分）。
+		Quaternion upright = Quaternion.FromToRotation(transform.up, Vector3.up) * transform.rotation;
+
+		Vector3 flatForward = upright * Vector3.forward;
+		flatForward.y = 0f;
+
+		float yaw0 = flatForward.sqrMagnitude > 0.0001f
+			? Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg
+			: 0f;
+
+		m_BaseRotation = Quaternion.AngleAxis(-yaw0, Vector3.up) * upright;
+		m_Yaw = yaw0;
+
+		// 立正后立即应用，避免第一帧还是歪的
+		transform.rotation = Quaternion.AngleAxis(m_Yaw, Vector3.up) * m_BaseRotation;
 	}
 
 	// 没有刚体和抓取组件就补上：拿在手里能跟着手走，松手能靠重力摔在地上
