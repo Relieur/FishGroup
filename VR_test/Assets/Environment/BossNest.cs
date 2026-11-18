@@ -60,6 +60,10 @@ namespace VRTest.Environment
 		// 是否已被玩家攻击过（激怒）。未激怒时 Boss 只转向不追击
 		bool m_Enraged;
 
+		// 基准姿态与当前偏航，用于回家时面向移动方向
+		Quaternion m_BaseRot = Quaternion.identity;
+		float m_CurYaw;
+
 		public bool IsBossAlive => m_Boss != null && m_Boss.IsAlive;
 		public bool IsDefeated => m_Dead;
 
@@ -117,6 +121,10 @@ namespace VRTest.Environment
 			m_Boss.chasePlayer = false;   // 初始不追，等玩家靠近
 
 			m_LastHealth = 1f;
+
+			// 记录基准姿态（等价 LuffyEnemy 的 m_BaseRotation），初始 yaw 为 0
+			m_BaseRot = rot;
+			m_CurYaw = 0f;
 
 			Debug.Log(string.Format("[Boss] 已生成 {0}，血量 {1}，缩放 {2}x",
 				go.name, m_Boss.maxHits, bossScale));
@@ -181,16 +189,9 @@ namespace VRTest.Environment
 
 			if (distFromHome > leashRadius)
 			{
-				// 强制往回走
-				Vector3 toHome = m_HomePosition - m_Boss.transform.position;
-				toHome.y = 0f;
-
-				if (toHome.sqrMagnitude > 0.01f)
-				{
-					Vector3 dir = toHome.normalized;
-					float speed = bossMoveSpeed * returnSpeedScale;
-					m_Boss.transform.position += dir * speed * Time.deltaTime;
-				}
+				// 追出去太远了：强制往回走
+				m_Boss.chasePlayer = false;
+				ReturnHome();
 				return;   // 回程中不处理追击
 			}
 
@@ -201,9 +202,40 @@ namespace VRTest.Environment
 				return;
 			}
 
-			// 激怒后：玩家在激活范围内就追
+			// 激怒后：玩家在激活范围内就追，离开则返回原位
 			float distToPlayer = HorizontalDistance(m_Player.position, m_Boss.transform.position);
-			m_Boss.chasePlayer = distToPlayer <= activateRadius;
+
+			if (distToPlayer > activateRadius)
+			{
+				// 玩家跑远了：停止追击，游回巢穴
+				m_Boss.chasePlayer = false;
+				ReturnHome();
+			}
+			else
+			{
+				m_Boss.chasePlayer = true;
+			}
+		}
+
+		// Boss 游回巢穴，并面向移动方向
+		void ReturnHome()
+		{
+			Vector3 toHome = m_HomePosition - m_Boss.transform.position;
+			toHome.y = 0f;
+
+			// 到位置了就停下
+			if (toHome.sqrMagnitude < 0.04f) return;
+
+			Vector3 dir = toHome.normalized;
+			float speed = bossMoveSpeed * returnSpeedScale;
+
+			m_Boss.transform.position += dir * speed * Time.deltaTime;
+
+			// 面向移动方向，复刻 LuffyEnemy 的旋转公式
+			float targetYaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg + m_Boss.facingYawOffset;
+			m_CurYaw = Mathf.LerpAngle(m_CurYaw, targetYaw,
+				Mathf.Clamp01(m_Boss.turnSpeed * Time.deltaTime));
+			m_Boss.transform.rotation = Quaternion.AngleAxis(m_CurYaw, Vector3.up) * m_BaseRot;
 		}
 
 		Vector3 SnapToGround(Vector3 point)
