@@ -3,16 +3,20 @@ using UnityEngine;
 
 namespace VRTest.Environment
 {
-	// 怪物巢穴：固定位置刷新 3~5 只怪，模型随机不重复
+	// 怪物巢穴：固定位置刷新 3~5 只小怪，模型随机不重复
 	// 玩家靠近吸引仇恨；玩家离开范围后整窝复活
-	//
-	// 刻意不修改 LuffyEnemy，只通过它已有的公开字段（chasePlayer / moveSpeed）
-	// 控制警戒分级，朝向逻辑完全交给原版处理。
+	// Boss 战斗时可以全局抑制所有巢穴的仇恨
 	[AddComponentMenu("VR/Environment/Enemy Nest")]
 	public class EnemyNest : MonoBehaviour
 	{
+		// 所有活跃巢穴，供 BossNest 统一抑制仇恨
+		static readonly List<EnemyNest> s_All = new List<EnemyNest>();
+
+		// 全局抑制标记：Boss 战斗时置 true
+		static bool s_Suppressed;
+
 		[Header("刷新")]
-		[Tooltip("怪物预制体候选列表（YG_02/03/04/05），YG_01 是白模不要用")]
+		[Tooltip("小怪预制体候选列表（YG_02/03/04/05），YG_01 是白模不要用")]
 		public GameObject[] enemyPrefabs;
 
 		[Min(1)] public int minCount = 3;
@@ -36,11 +40,11 @@ namespace VRTest.Environment
 		[Tooltip("玩家离开这个半径才开始计算复活计时")]
 		public float leaveRadius = 20f;
 
-		[Tooltip("警戒状态下的移动速度倍率（相对仇恨时的全速）")]
+		[Tooltip("警戒状态下的移动速度倍率")]
 		[Range(0.1f, 1f)] public float alertSpeedScale = 0.45f;
 
 		[Header("模型朝向")]
-		[Tooltip("生成初始旋转，必须与场景 YG_01 一致：(270, 270, 0)。不要随机化，否则会破坏 LuffyEnemy 的姿态基准")]
+		[Tooltip("生成初始旋转，必须与场景 YG_01 一致：(270, 270, 0)")]
 		public Vector3 spawnEuler = new Vector3(270f, 270f, 0f);
 
 		[Header("调试")]
@@ -49,7 +53,6 @@ namespace VRTest.Environment
 		public enum NestState { Idle, Alert, Combat }
 		public NestState State => m_State;
 
-		// 运行时
 		readonly List<LuffyEnemy> m_Enemies = new List<LuffyEnemy>();
 		readonly List<GameObject> m_ShufflePool = new List<GameObject>();
 		readonly List<float> m_BaseSpeed = new List<float>();
@@ -58,6 +61,32 @@ namespace VRTest.Environment
 		float m_LeaveTimer;
 		int m_TargetCount;
 		Transform m_Player;
+
+		// ---- 静态接口 ----
+
+		// Boss 战斗开始/结束时调用，抑制或恢复所有巢穴的仇恨
+		public static void SetAllSuppressed(bool suppressed)
+		{
+			s_Suppressed = suppressed;
+			for (int i = 0; i < s_All.Count; i++)
+			{
+				if (s_All[i] != null) s_All[i].ApplySuppression();
+			}
+		}
+
+		public static int ActiveNestCount => s_All.Count;
+
+		void OnEnable()
+		{
+			if (!s_All.Contains(this)) s_All.Add(this);
+		}
+
+		void OnDisable()
+		{
+			s_All.Remove(this);
+		}
+
+		// ---- 生命周期 ----
 
 		void Start()
 		{
@@ -80,17 +109,22 @@ namespace VRTest.Environment
 
 		void Update()
 		{
+			// Boss 战斗中：所有小怪保持游荡，不追玩家
+			if (s_Suppressed)
+			{
+				SetState(NestState.Idle);
+				return;
+			}
+
 			ResolvePlayer();
 			if (m_Player == null) return;
 
 			float dist = HorizontalDistance(m_Player.position, transform.position);
 
-			// 根据距离切换状态：仇恨 > 警戒 > 游荡
 			if (dist <= aggroRadius) SetState(NestState.Combat);
 			else if (dist <= alertRadius) SetState(NestState.Alert);
 			else SetState(NestState.Idle);
 
-			// 玩家走远后计时复活
 			if (dist > leaveRadius)
 			{
 				m_LeaveTimer += Time.deltaTime;
@@ -103,7 +137,12 @@ namespace VRTest.Environment
 			else m_LeaveTimer = 0f;
 		}
 
-		// 通过 LuffyEnemy 已有的公开字段实现警戒分级，不改它的代码
+		// 全局抑制状态变化时立即应用
+		void ApplySuppression()
+		{
+			if (s_Suppressed) SetState(NestState.Idle);
+		}
+
 		void SetState(NestState next)
 		{
 			if (m_State == next) return;
@@ -159,7 +198,6 @@ namespace VRTest.Environment
 				var e = CreateEnemy(i);
 				if (e != null) m_Enemies.Add(e);
 			}
-			// 初始为游荡状态
 			SetStateImmediate(NestState.Idle);
 		}
 
@@ -179,14 +217,11 @@ namespace VRTest.Environment
 			if (prefab == null) return null;
 
 			Vector3 pos = PickSpawnPosition(index, m_TargetCount);
-
-			// 统一用 YG_01 的朝向，不随机旋转
 			Quaternion rot = Quaternion.Euler(spawnEuler);
 
 			var go = Instantiate(prefab, pos, rot);
 			go.name = prefab.name + "_Nest" + (index + 1);
 
-			// YG 的 FBX 带水平偏移，清掉让怪落在巢穴位置
 			if (go.transform.childCount > 0)
 			{
 				var child = go.transform.GetChild(0);
@@ -197,12 +232,9 @@ namespace VRTest.Environment
 			var e = go.GetComponent<LuffyEnemy>();
 			if (e == null) e = go.AddComponent<LuffyEnemy>();
 
-			// 关键 1：LuffyEnemy.Start() 会调用 PlaceInPlayerView() 把怪搬到玩家附近，
-			// 这里必须先关掉，否则巢穴刷出来的怪会全部跑到玩家面前。
+			// 关键：防止 Start() 把怪搬到玩家视野内
 			e.spawnInView = false;
-
-			// 关键 2：LuffyEnemy 死亡后会自动复活（respawnDelay 秒后原地满血重现）。
-			// 复活由巢穴统一管理，这里把它的自愈推到很远，避免两套复活打架。
+			// 复活由巢穴统一管理
 			e.respawnDelay = 99999f;
 
 			return e;
@@ -266,9 +298,7 @@ namespace VRTest.Environment
 				if (fresh != null)
 				{
 					m_Enemies[i] = fresh;
-					// 复活后按当前状态立即设置
-					fresh.chasePlayer = (m_State != NestState.Idle);
-					if (m_State == NestState.Alert) SetSpeed(i, fresh, alertSpeedScale);
+					fresh.chasePlayer = (m_State != NestState.Idle && !s_Suppressed);
 				}
 			}
 		}
