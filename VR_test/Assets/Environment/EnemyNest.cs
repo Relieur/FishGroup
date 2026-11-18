@@ -56,6 +56,8 @@ namespace VRTest.Environment
 		readonly List<LuffyEnemy> m_Enemies = new List<LuffyEnemy>();
 		readonly List<GameObject> m_ShufflePool = new List<GameObject>();
 		readonly List<float> m_BaseSpeed = new List<float>();
+		// 每只怪的出生点，用于"回到原位"
+		readonly List<Vector3> m_HomeSpots = new List<Vector3>();
 
 		NestState m_State = NestState.Idle;
 		float m_LeaveTimer;
@@ -109,10 +111,11 @@ namespace VRTest.Environment
 
 		void Update()
 		{
-			// Boss 战斗中：所有小怪保持游荡，不追玩家
+			// Boss 战斗中：所有小怪停止追击，并走回出生点
 			if (s_Suppressed)
 			{
 				SetState(NestState.Idle);
+				ReturnHome();
 				return;
 			}
 
@@ -141,6 +144,33 @@ namespace VRTest.Environment
 		void ApplySuppression()
 		{
 			if (s_Suppressed) SetState(NestState.Idle);
+		}
+
+		// 让所有存活的小怪走回各自的出生点
+		void ReturnHome()
+		{
+			for (int i = 0; i < m_Enemies.Count; i++)
+			{
+				var e = m_Enemies[i];
+				if (e == null || !e.IsAlive) continue;
+				if (i >= m_HomeSpots.Count) continue;
+
+				Vector3 home = m_HomeSpots[i];
+				Vector3 pos = e.transform.position;
+
+				Vector3 toHome = home - pos;
+				toHome.y = 0f;
+
+				// 已经到位置了就不再动
+				if (toHome.sqrMagnitude < 0.04f) continue;
+
+				Vector3 dir = toHome.normalized;
+				float speed = m_BaseSpeed.Count > i && m_BaseSpeed[i] > 0f
+					? m_BaseSpeed[i] : 0.6f;
+
+				// 回家时速度稍快，避免磨蹭
+				e.transform.position += dir * speed * 1.2f * Time.deltaTime;
+			}
 		}
 
 		void SetState(NestState next)
@@ -236,6 +266,10 @@ namespace VRTest.Environment
 			e.spawnInView = false;
 			// 复活由巢穴统一管理
 			e.respawnDelay = 99999f;
+
+			// 记录出生点
+			while (m_HomeSpots.Count <= index) m_HomeSpots.Add(Vector3.zero);
+			m_HomeSpots[index] = pos;
 
 			return e;
 		}

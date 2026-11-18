@@ -57,6 +57,8 @@ namespace VRTest.Environment
 		float m_LastHealth = 1f;
 		bool m_Dead;
 		bool m_Suppressing;
+		// 是否已被玩家攻击过（激怒）。未激怒时 Boss 只转向不追击
+		bool m_Enraged;
 
 		public bool IsBossAlive => m_Boss != null && m_Boss.IsAlive;
 		public bool IsDefeated => m_Dead;
@@ -160,8 +162,9 @@ namespace VRTest.Environment
 				Debug.Log("[Boss] 玩家开始攻击 Boss，已抑制所有小怪仇恨");
 			}
 
-			// 被打就进入战斗
-			if (!m_Boss.chasePlayer) m_Boss.chasePlayer = true;
+			// 首次被攻击：进入激怒状态，之后才会追击玩家
+			m_Enraged = true;
+			m_Boss.chasePlayer = true;
 		}
 
 		void ReleaseSuppress()
@@ -191,7 +194,14 @@ namespace VRTest.Environment
 				return;   // 回程中不处理追击
 			}
 
-			// 玩家进入激活范围才开始追
+			// 未被攻击过：只转向，不追击
+			if (!m_Enraged)
+			{
+				m_Boss.chasePlayer = false;
+				return;
+			}
+
+			// 激怒后：玩家在激活范围内就追
 			float distToPlayer = HorizontalDistance(m_Player.position, m_Boss.transform.position);
 			m_Boss.chasePlayer = distToPlayer <= activateRadius;
 		}
