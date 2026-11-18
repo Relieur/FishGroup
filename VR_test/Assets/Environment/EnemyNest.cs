@@ -126,7 +126,12 @@ namespace VRTest.Environment
 
 			if (dist <= aggroRadius) SetState(NestState.Combat);
 			else if (dist <= alertRadius) SetState(NestState.Alert);
-			else SetState(NestState.Idle);
+			else
+			{
+				// 玩家离开警戒圈：停止追击并游回各自出生点
+				SetState(NestState.Idle);
+				ReturnHome();
+			}
 
 			if (dist > leaveRadius)
 			{
