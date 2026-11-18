@@ -59,6 +59,10 @@ namespace VRTest.Environment
 		// 每只怪的出生点，用于"回到原位"
 		readonly List<Vector3> m_HomeSpots = new List<Vector3>();
 
+		// 每只怪的基准姿态与当前偏航，复刻 LuffyEnemy 的旋转公式
+		readonly List<Quaternion> m_BaseRot = new List<Quaternion>();
+		readonly List<float> m_CurYaw = new List<float>();
+
 		NestState m_State = NestState.Idle;
 		float m_LeaveTimer;
 		int m_TargetCount;
@@ -175,6 +179,15 @@ namespace VRTest.Environment
 
 				// 回家时速度稍快，避免磨蹭
 				e.transform.position += dir * speed * 1.2f * Time.deltaTime;
+
+				// 面向移动方向：复刻 LuffyEnemy 的旋转公式
+				if (i < m_BaseRot.Count && i < m_CurYaw.Count)
+				{
+					float targetYaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg + e.facingYawOffset;
+					m_CurYaw[i] = Mathf.LerpAngle(m_CurYaw[i], targetYaw,
+						Mathf.Clamp01(e.turnSpeed * Time.deltaTime));
+					e.transform.rotation = Quaternion.AngleAxis(m_CurYaw[i], Vector3.up) * m_BaseRot[i];
+				}
 			}
 		}
 
@@ -275,6 +288,12 @@ namespace VRTest.Environment
 			// 记录出生点
 			while (m_HomeSpots.Count <= index) m_HomeSpots.Add(Vector3.zero);
 			m_HomeSpots[index] = pos;
+
+			// 记录基准姿态（等价 LuffyEnemy 的 m_BaseRotation），初始 yaw 为 0
+			while (m_BaseRot.Count <= index) m_BaseRot.Add(Quaternion.identity);
+			m_BaseRot[index] = rot;
+			while (m_CurYaw.Count <= index) m_CurYaw.Add(0f);
+			m_CurYaw[index] = 0f;
 
 			return e;
 		}
