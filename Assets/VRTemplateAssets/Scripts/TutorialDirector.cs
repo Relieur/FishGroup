@@ -40,6 +40,7 @@ public class TutorialDirector : MonoBehaviour
 	public string blockDoneIntro = "已经没什么好教的了";
 	public string startTaskLine = "现在开始你的任务";
 	public string farewellLine = "去你的吧";
+	public string sprintLine = "哦对了，按下左摇杆可以奔跑";
 
 	[Header("节奏")]
 	[Tooltip("练枪阶段要累计发射的泡泡数")]
@@ -68,7 +69,7 @@ public class TutorialDirector : MonoBehaviour
 		Intro, Grab, Fire, Practice, NextFish,
 		UpgradeIntro, UpgradePrompt,
 		DamageIntro, Radiation, ShieldIntro, GrabShield, BlockPractice,
-		Outro1, Outro2, Outro3, Done
+		Outro1, Outro2, Outro3, Outro4, Done
 	}
 
 	const float k_BaseWidth = 900f;
@@ -264,8 +265,15 @@ public class TutorialDirector : MonoBehaviour
 			return;
 		}
 
-		// 最后一句消失：传送到原点，结束教程
 		if (m_Step == Step.Outro3)
+		{
+			m_Step = Step.Outro4;
+			ShowText(sprintLine, true);
+			return;
+		}
+
+		// 最后一句消失：传送到原点，结束教程
+		if (m_Step == Step.Outro4)
 		{
 			// 传送前收起血条，传送后积分和等级归零
 			if (PlayerHealthBar.Instance != null) PlayerHealthBar.Instance.SetVisible(false);
