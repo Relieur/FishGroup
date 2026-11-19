@@ -1,0 +1,68 @@
+%YAML 1.1
+%TAG !u! tag:yousandi.cn,2023:
+--- !u!1 &6101944676520655404
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 7
+  m_Component:
+  - component: {fileID: 3506579601867534415}
+  - component: {fileID: 2182659830774926450}
+  m_Layer: 0
+  m_HasEditorInfo: 1
+  m_Name: EnemyNest
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3506579601867534415
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6101944676520655404}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2182659830774926450
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6101944676520655404}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ebd3eb53161548fc852513d7351eb02c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  enemyPrefabs:
+  - {fileID: 5218346815523844940, guid: e79977850a8a51646acc778ff9f9e4bc, type: 3}
+  - {fileID: 6576806093363074078, guid: 925e009c343c40b45984fb10c2c69b49, type: 3}
+  - {fileID: 1170638164626611325, guid: a38d951eab10a9d4998e9ec1d3a3638f, type: 3}
+  - {fileID: 4316142573429989757, guid: bff4e83496ab8dd4cb603321c65a03e3, type: 3}
+  maxAlive: 7
+  spawnInterval: 2
+  oneShotWave: 0
+  totalCount: 12
+  spawnRadius: 12
+  minSpawnSpacing: 2.5
+  groundRayHeight: 12
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  aggroRadius: 12
+  loseTargetDelay: 4
+  fleeDistance: 6
+  fleeDuration: 2
+  spawnEuler: {x: 270, y: 270, z: 0}
+  drawGizmos: 1

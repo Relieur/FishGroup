@@ -1,2 +1,0 @@
-# FishGroup
-Unity VR Project
